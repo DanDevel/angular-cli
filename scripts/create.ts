@@ -7,19 +7,21 @@
  */
 
 /* eslint-disable import/no-extraneous-dependencies, no-prototype-builtins */
-import cli from '@angular/cli/lib/cli';
 import { logging } from '@angular-devkit/core';
-import * as child_process from 'child_process';
+import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { packages } from '../lib/packages';
 import build from './build';
+import { promisify } from 'util';
 
-export interface CreateOptions {
+const cli = promisify(require('@angular/cli/lib/cli'));
+
+interface CreateOptions {
   _: string[];
 }
 
-async function _ng(command: string, ...args: string[]) {
+async function ng(command: string, ...args: string[]) {
   const exitCode = await cli({
     cliArgs: [command, ...args],
   });
@@ -29,15 +31,15 @@ async function _ng(command: string, ...args: string[]) {
   }
 }
 
-async function _exec(
+async function exec(
   command: string,
   args: string[],
   opts: { cwd?: string },
   logger: logging.Logger,
 ) {
-  const { status, error, stderr, stdout } = child_process.spawnSync(command, args, { ...opts });
+  const { status, error, stderr, stdout } = spawnSync(command, args, { ...opts, encoding: 'utf-8' });
 
-  if (status != 0) {
+  if (status !== 0) {
     logger.error(`Command failed: ${command} ${args.map((x) => JSON.stringify(x)).join(', ')}`);
     if (error) {
       logger.error('Error: ' + (error ? error.message : 'undefined'));
@@ -50,7 +52,7 @@ async function _exec(
   return { stdout };
 }
 
-export default async function (
+export default async function createProject(
   args: CreateOptions,
   logger: logging.Logger,
   cwd: string,
@@ -63,32 +65,28 @@ export default async function (
 
   process.chdir(cwd);
   logger.info('Creating project...');
-  await _ng('new', projectName, '--skip-install', '--skip-git', '--no-interactive');
+  await ng('new', projectName, '--skip-install', '--skip-git', '--no-interactive');
 
   logger.info('Updating package.json...');
   const packageJsonPath = path.join(projectName, 'package.json');
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
 
-  if (!packageJson['dependencies']) {
-    packageJson['dependencies'] = {};
-  }
-  if (!packageJson['devDependencies']) {
-    packageJson['devDependencies'] = {};
-  }
+  packageJson.dependencies ??= {};
+  packageJson.devDependencies ??= {};
 
   // Set the dependencies to the new build we just used.
   for (const packageName of Object.keys(packages)) {
-    if (packageJson['dependencies'].hasOwnProperty(packageName)) {
-      packageJson['dependencies'][packageName] = packages[packageName].tar;
-    } else if (packageJson['devDependencies'].hasOwnProperty(packageName)) {
-      packageJson['devDependencies'][packageName] = packages[packageName].tar;
+    if (packageJson.dependencies.hasOwnProperty(packageName)) {
+      packageJson.dependencies[packageName] = packages[packageName].tar;
+    } else if (packageJson.devDependencies.hasOwnProperty(packageName)) {
+      packageJson.devDependencies[packageName] = packages[packageName].tar;
     }
   }
 
   fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2), 'utf-8');
 
   logger.info('Installing npm packages...');
-  await _exec('npm', ['install'], { cwd: path.join(cwd, projectName) }, logger);
+  await exec('npm', ['install'], { cwd: path.join(cwd, projectName) }, logger);
 
   process.chdir(oldCwd);
 
